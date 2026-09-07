@@ -1,0 +1,57 @@
+name: Reproducible release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build toolchain
+        run: docker build --platform linux/amd64 -f build-support/Dockerfile -t quarantine-build .
+      - name: Build twice with isolated caches
+        run: |
+          mkdir -p dist/first dist/second dist/release
+          docker run --rm --platform linux/amd64 -e SOURCE_COMMIT="$GITHUB_SHA" -v "$PWD:/src:ro" -v "$PWD/dist/first:/out" quarantine-build assembleRelease testDebugUnitTest lintDebug
+          docker run --rm --platform linux/amd64 -e SOURCE_COMMIT="$GITHUB_SHA" -v "$PWD:/src:ro" -v "$PWD/dist/second:/out" quarantine-build assembleRelease
+          cmp dist/first/quarantine-unsigned.apk dist/second/quarantine-unsigned.apk
+      - name: Sign and verify reconstructed APK
+        env:
+          QUARANTINE_KEYSTORE_BASE64: ${{ secrets.QUARANTINE_KEYSTORE_BASE64 }}
+          QUARANTINE_KEY_ALIAS: ${{ secrets.QUARANTINE_KEY_ALIAS }}
+          QUARANTINE_STORE_PASSWORD: ${{ secrets.QUARANTINE_STORE_PASSWORD }}
+          QUARANTINE_KEY_PASSWORD: ${{ secrets.QUARANTINE_KEY_PASSWORD }}
+        run: |
+          umask 077
+          signing_dir="$(mktemp -d "$RUNNER_TEMP/quarantine-signing.XXXXXX")"
+          trap 'rm -rf "$signing_dir"' EXIT
+          export QUARANTINE_KEYSTORE_OUTPUT="$signing_dir/release.jks"
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          Path(os.environ['QUARANTINE_KEYSTORE_OUTPUT']).write_bytes(base64.b64decode(os.environ['QUARANTINE_KEYSTORE_BASE64'], validate=True))
+          PY
+          docker run --rm --platform linux/amd64 --entrypoint bash \
+            -e QUARANTINE_KEY_ALIAS -e QUARANTINE_STORE_PASSWORD -e QUARANTINE_KEY_PASSWORD \
+            -e QUARANTINE_KEYSTORE=/signing/release.jks \
+            -v "$signing_dir:/signing:ro" -v "$PWD:/src:ro" -v "$PWD/dist:/out" quarantine-build \
+            /src/scripts/sign-release.sh /out/first/quarantine-unsigned.apk /out/release/quarantine.apk
+          docker run --rm --platform linux/amd64 --entrypoint python \
+            -v "$PWD:/src:ro" -v "$PWD/dist:/out" quarantine-build \
+            /src/scripts/verify-apk.py /out/release/quarantine.apk /out/second/quarantine-unsigned.apk /out/reconstructed.apk
+          cp dist/first/build-info.json dist/release/build-info.json
+          cd dist/release
+          sha256sum quarantine.apk > SHA256SUMS
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<'EOF'
+          Install quarantine.apk on Android 10 or later. Enable Usage Access, Accessibility access, and notifications in the app.
+
+          This APK passed two isolated source builds and exact signed-APK reconstruction. See README.md at this tag for reproducible build and signature verification instructions. SHA256SUMS and build-info.json identify the artifact and source inputs.
+          EOF
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Quarantine $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" dist/release/quarantine.apk dist/release/SHA256SUMS dist/release/build-info.json

@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Quarantine</string>
+    <string name="accessibility_description">Quarantine observes which app is on screen and covers apps you select with a hold-to-unlock screen. It uses window package names, not screen text. All information stays on this device. You can disable this service at any time in Android Settings.</string>
+</resources>

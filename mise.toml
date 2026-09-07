@@ -1,0 +1,4 @@
+[tools]
+java = "temurin-17.0.18+8"
+node = "26"
+python = "3"
