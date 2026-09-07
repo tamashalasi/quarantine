@@ -4,7 +4,7 @@ A simple, local-only Android app that puts a deliberate pause between you and se
 
 ## Use
 
-1. Install the APK. Open Quarantine and enable **app blocking** in Android Accessibility settings, **usage access**, and **notifications**. On some Android versions, sideloaded apps first require **Allow restricted settings** in Android's app-info menu.
+1. Download `quarantine.apk` from [GitHub Releases](https://github.com/tamashalasi/quarantine/releases/latest) and install it on Android 10 or later. Open Quarantine and enable **app blocking** in Android Accessibility settings, **usage access**, and **notifications**. On some Android versions, sideloaded apps first require **Allow restricted settings** in Android's app-info menu.
 2. Hold **Unlock quarantine settings** continuously for 10 seconds. The slider and countdown show the remaining time. Releasing, sliding outside the button, or leaving the screen resets the hold. A focused button also supports holding Space or Enter.
 3. Choose a hold time from 1–300 seconds. Tap an app row or checkbox to toggle quarantine. Changes save automatically. Filter by **All**, **In quarantine**, or **Not in quarantine**. Apps sort by seven-day screen time, then name.
 4. Opening a quarantined app displays **Unlock quarantine for [app-name]** with the same hold mechanism and screen-time summary.
@@ -84,11 +84,36 @@ cmp dist/rebuild/quarantine-unsigned.apk dist/second/quarantine-unsigned.apk
 
 Create and retain an offline-backed-up RSA signing keystore. Configure GitHub Actions secrets `QUARANTINE_KEYSTORE_BASE64` (single-line base64 keystore), `QUARANTINE_KEY_ALIAS`, `QUARANTINE_STORE_PASSWORD`, and `QUARANTINE_KEY_PASSWORD`. Never commit a private key. Repository creation, secret configuration, and actual publication are maintainer steps.
 
-Update `versionCode` and `versionName` in `app/build.gradle.kts`, wait for the **Check** workflow (including API 29 and 36 device tests) to pass on that commit, then push a matching `v*` tag. **Reproducible release** builds twice in separate clean containers, compares unsigned APKs, signs one, reconstructs the other, and checks the exact signed hash before publishing the APK, checksum, and build information. Release checks intentionally fail if signing secrets are missing.
+To create a signing key once, run the following locally and retain a secure backup of the keystore and its password. Reuse this key for every release so installed copies can update:
+
+```sh
+keytool -genkeypair -keystore quarantine-release.jks -storetype JKS \
+  -alias quarantine -keyalg RSA -keysize 4096 -validity 10000
+```
+
+In **Settings → Secrets and variables → Actions**, set `QUARANTINE_KEYSTORE_BASE64` to the single-line base64 encoding of that file, `QUARANTINE_KEY_ALIAS` to `quarantine`, and the two password secrets to the passwords entered above. The workflow checks these secrets before building.
+
+Commit your changes, then run:
+
+```sh
+./scripts/release.sh
+```
+
+At startup, the script asks for **patch**, **minor**, or **major** and displays the current and proposed versions. For example, from `1.2.3`: patch → `1.2.4`, minor → `1.3.0`, major → `2.0.0`. It also increments Android's `versionCode` by one.
+
+The script requires a clean working branch and rejects existing tags. It creates the version bump in an isolated checkout and runs the complete local test suite against that exact commit. Only after success does it fast-forward your local branch to the release commit, create an annotated `v*` tag, and atomically push both the branch and tag to `origin`. Pass another remote as the sole argument if needed. Test failure leaves your working branch/version unchanged and creates no tag. Push failure retains the tested local commit and tag for inspection. The version commit and its tag are pushed together: if either update is rejected, neither remote reference changes. The full test output is retained in `dist/local-tests/release-vVERSION.log`.
+
+`./scripts/test.sh` runs the same checks without releasing: debug/release compilation, JVM tests, lint, and native instrumentation on API 29 and 36. Install the pinned Java/toolchain, Android SDK and KVM support first. Provide **disposable test AVDs** named `quarantine-api29` and `quarantine-api36`; override these with `TEST_AVD_API29` and `TEST_AVD_API36`. The script clears Quarantine data and disables Accessibility services in these test AVDs. During instrumentation it suppresses system error dialogs (as Android CTS does), restores that setting afterward, and retains logcat diagnostics; application crashes still fail the run. It starts and stops them sequentially on ports 5560 and 5562 (overridable with `TEST_PORT_API29` and `TEST_PORT_API36`). Stop these AVDs if already running elsewhere. Reports are saved under `dist/local-tests/` and `app/build/reports/`. Tests run locally; first-time dependency downloads still require internet access. Publishing the tag requires network access.
+
+There is no standalone GitHub testing workflow. **Reproducible release** still builds, verifies reproducibility, signs, and publishes the tagged source. Use the local script for new releases. Manual dispatch with an existing tag remains available to retry publication.
+
+The workflow must be present in the selected tag; manual dispatch also requires it on the default branch. **Reproducible release** checks out the exact tag, builds twice in separate clean containers, compares unsigned APKs, signs one, reconstructs the other, and checks the exact signed hash before publishing `quarantine.apk`, `SHA256SUMS`, and `build-info.json`. The same files are retained as a workflow artifact. An existing release keeps its notes; reruns replace assets with matching names. The APK is signed and ready to install, with no build tools required by users. Release checks intentionally fail if signing secrets are missing.
 
 When changing dependencies, explicitly regenerate verification metadata with `./gradlew --write-verification-metadata sha256 assembleDebug assembleRelease assembleDebugAndroidTest testDebugUnitTest lintDebug`, review new artifacts/checksums, and commit `gradle/verification-metadata.xml`. Do not disable verification to bypass a checksum mismatch. Re-run reproducibility checks after any toolchain/dependency change.
 
 ## Tests
+
+Run the full local release gate with `./scripts/test.sh`. Release-script regression tests use temporary repositories and local bare remotes, so they never publish to GitHub. For individual Android checks:
 
 ```sh
 mise exec -- ./gradlew testDebugUnitTest lintDebug assembleDebug assembleRelease

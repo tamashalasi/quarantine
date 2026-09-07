@@ -2,20 +2,52 @@ name: Reproducible release
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build (for example v1.0.0)'
+        required: true
+        type: string
 permissions:
   contents: write
+concurrency:
+  group: release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
 jobs:
   release:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
+      - name: Validate release configuration
+        env:
+          QUARANTINE_KEYSTORE_BASE64: ${{ secrets.QUARANTINE_KEYSTORE_BASE64 }}
+          QUARANTINE_KEY_ALIAS: ${{ secrets.QUARANTINE_KEY_ALIAS }}
+          QUARANTINE_STORE_PASSWORD: ${{ secrets.QUARANTINE_STORE_PASSWORD }}
+          QUARANTINE_KEY_PASSWORD: ${{ secrets.QUARANTINE_KEY_PASSWORD }}
+        run: |
+          [[ "$RELEASE_TAG" == v* ]] || { echo '::error::Release tags must start with v.'; exit 1; }
+          git check-ref-format "refs/tags/$RELEASE_TAG"
+          for secret in QUARANTINE_KEYSTORE_BASE64 QUARANTINE_KEY_ALIAS QUARANTINE_STORE_PASSWORD QUARANTINE_KEY_PASSWORD; do
+            if [[ -z "${!secret}" ]]; then
+              echo "::error::Missing repository Actions secret: $secret. See README.md, Maintaining releases."
+              exit 1
+            fi
+          done
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
       - name: Build toolchain
         run: docker build --platform linux/amd64 -f build-support/Dockerfile -t quarantine-build .
       - name: Build twice with isolated caches
         run: |
           mkdir -p dist/first dist/second dist/release
-          docker run --rm --platform linux/amd64 -e SOURCE_COMMIT="$GITHUB_SHA" -v "$PWD:/src:ro" -v "$PWD/dist/first:/out" quarantine-build assembleRelease testDebugUnitTest lintDebug
-          docker run --rm --platform linux/amd64 -e SOURCE_COMMIT="$GITHUB_SHA" -v "$PWD:/src:ro" -v "$PWD/dist/second:/out" quarantine-build assembleRelease
+          source_commit="$(git rev-parse HEAD)"
+          docker run --rm --platform linux/amd64 -e SOURCE_COMMIT="$source_commit" -v "$PWD:/src:ro" -v "$PWD/dist/first:/out" quarantine-build assembleRelease
+          docker run --rm --platform linux/amd64 -e SOURCE_COMMIT="$source_commit" -v "$PWD:/src:ro" -v "$PWD/dist/second:/out" quarantine-build assembleRelease
           cmp dist/first/quarantine-unsigned.apk dist/second/quarantine-unsigned.apk
       - name: Sign and verify reconstructed APK
         env:
@@ -43,7 +75,12 @@ jobs:
             /src/scripts/verify-apk.py /out/release/quarantine.apk /out/second/quarantine-unsigned.apk /out/reconstructed.apk
           cp dist/first/build-info.json dist/release/build-info.json
           cd dist/release
-          sha256sum quarantine.apk > SHA256SUMS
+          sha256sum quarantine.apk build-info.json > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: quarantine-release
+          path: dist/release
+          if-no-files-found: error
       - name: Publish verified release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,5 +90,9 @@ jobs:
 
           This APK passed two isolated source builds and exact signed-APK reconstruction. See README.md at this tag for reproducible build and signature verification instructions. SHA256SUMS and build-info.json identify the artifact and source inputs.
           EOF
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Quarantine $GITHUB_REF_NAME" \
-            --notes-file "$RUNNER_TEMP/release-notes.md" dist/release/quarantine.apk dist/release/SHA256SUMS dist/release/build-info.json
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/release/quarantine.apk dist/release/SHA256SUMS dist/release/build-info.json --clobber
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --title "Quarantine $RELEASE_TAG" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" dist/release/quarantine.apk dist/release/SHA256SUMS dist/release/build-info.json
+          fi

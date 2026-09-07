@@ -30,7 +30,7 @@ Unsigned release APK SHA-256:
 
 The same unsigned hash was obtained in the local development workspace and both container builds. One container bootstrapped the checksum manifest; the other built with strict verification. The checksum sets were compared and had no conflicting hashes or container-only artifacts. Signing/reconstruction used an ephemeral **test key**, not a production release identity. No GitHub release was published.
 
-Initial Android 16 and Android 10 software emulator attempts without KVM failed to become usable. After KVM became available, the API 29 and API 36 native suites and an API 29 manual Accessibility/notification smoke test passed (details below). The broader [device acceptance checklist](device-testing.md), including OEM behavior, remains pending on physical devices. GitHub Actions is configured to run the shared device tests on API 29 and 36.
+Initial Android 16 and Android 10 software emulator attempts without KVM failed to become usable. After KVM became available, the API 29 and API 36 native suites and an API 29 manual Accessibility/notification smoke test passed (details below). The broader [device acceptance checklist](device-testing.md), including OEM behavior, remains pending on physical devices. The local `scripts/test.sh` runner now runs the shared device tests on API 29 and 36 before release; the standalone GitHub testing workflow has been removed.
 
 The installable local development artifact is `dist/quarantine-debug.apk`. It uses a development signing key and is separate from the unsigned reproducible release artifact. Build outputs and detailed local reports are intentionally ignored by Git.
 
@@ -67,3 +67,11 @@ The tested debug APK matches `dist/quarantine-debug.apk`, SHA-256 `94c9e009beda9
 The workflow's Docker build and both device-test matrix entries passed locally after KVM became available. SDK installation, AVD creation, emulator boot, and `connectedDebugAndroidTest` succeeded on API 29 and 36 with strict dependency verification. Each emulator ran six tests with no failures or skips. The clean Docker build executed all 99 tasks, including debug/release builds, 16 JVM tests, and lint.
 
 The workflow shell commands were executed directly. Local adaptations used the installed SDK through a `cmdline-tools/latest` symlink, isolated AVD directories recreated with `--force`, and separate emulator ports selected through `ANDROID_SERIAL`. GitHub checkout, Java setup, and artifact upload actions were not emulated. Both test emulators were stopped afterward. Logs, per-API test reports, and the detailed run record are in `dist/check/`.
+
+## Local release gate validation
+
+The release script now prompts for patch/minor/major, shows old/new versions, increments `versionCode`, and tests an isolated release commit before updating the working branch and publishing its annotated tag. Five regression tests against temporary repositories and local bare remotes passed, covering version choices, test failure, dirty worktrees, existing remote tags, and rejected pushes. No real release was published during validation.
+
+Debug/release compilation, strict dependency verification, all 16 JVM tests, and lint passed. After correcting emulator startup setup, the native runner passed all six tests on API 29 (24.087 seconds) and API 36 (63.347 seconds), then shut down both emulators. Earlier API 36 runs encountered System UI ANR dialogs that stole focus. The runner now uses Android CTS-style temporary error-dialog suppression, closes existing system dialogs, checks app window focus, restores the dialog setting, and retains logcat. This is instrumentation setup, not evidence that Android's startup ANRs have been fixed.
+
+The standalone GitHub testing workflow was removed; the release workflow retains reproducible builds, signing, and publication. Local runner reports are under `dist/local-tests/`. Build/JVM/lint checks and the corrected native stage were validated separately while refining the runner.

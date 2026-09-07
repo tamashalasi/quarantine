@@ -32,3 +32,5 @@ adb -s SERIAL shell am instrument -w \
 ```
 
 Run instrumentation before enabling Quarantine's Accessibility service, because the test runner's UI automation can suppress other Accessibility services. Then enable the service for the manual interception checks.
+
+The local native runner temporarily sets `hide_error_dialogs=1` and sends `CLOSE_SYSTEM_DIALOGS`, following [Android CTS setup](https://android.googlesource.com/platform/cts/+/8c2a0a01038), so startup dialogs cannot capture test input. It restores the setting and saves logcat on exit. This applies only to disposable emulator instrumentation; perform the manual checklist with normal dialog behavior.
