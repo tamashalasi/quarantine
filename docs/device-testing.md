@@ -17,3 +17,18 @@ Run on Android 10 (API 29), Android 13+ for notification permissions, and Androi
 - Record split-screen, picture-in-picture, Recents previews, background media, and OEM battery-management limitations; do not describe them as comprehensive blocking.
 
 Record device model, OS/API, build commit, results, and any observed failures. Never claim a scenario passed solely because its test code compiled.
+
+## Local emulator preparation
+
+Check `emulator -accel-check` before starting an AVD. The local KVM retry used `-accel on -cores 2 -memory 3072 -gpu swiftshader -feature -Vulkan -no-snapshot -timezone Etc/UTC`. The explicit timezone avoids invalid host timezone detection. A 480×800 display at density 160 reduced software rendering load.
+
+Wait for boot completion, dismiss the lock screen, and confirm Android has no startup ANR dialogs before running instrumentation. `adb -s SERIAL shell dumpsys window` shows the focused window. A System UI ANR dialog can steal focus while the test activity is resumed; the hold button intentionally stays disabled when its window lacks focus. Keep emulator startup failures separate from application test failures, and retain the failed run's evidence when retrying.
+
+Install both debug APKs, then run:
+
+```sh
+adb -s SERIAL shell am instrument -w \
+  app.quarantine.android.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Run instrumentation before enabling Quarantine's Accessibility service, because the test runner's UI automation can suppress other Accessibility services. Then enable the service for the manual interception checks.

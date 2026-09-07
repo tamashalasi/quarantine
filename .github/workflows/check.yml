@@ -37,8 +37,9 @@ jobs:
         env:
           TEST_API: ${{ matrix.api }}
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
           sudo chmod 666 /dev/kvm
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "system-images;android-$TEST_API;google_apis;x86_64"
+          sdkmanager "platform-tools" "emulator" "platforms;android-36" "build-tools;36.0.0" "system-images;android-$TEST_API;google_apis;x86_64"
           echo no | avdmanager create avd --name quarantine-test --package "system-images;android-$TEST_API;google_apis;x86_64" --device pixel_2
           "$ANDROID_HOME/emulator/emulator" -avd quarantine-test -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > emulator.log 2>&1 &
           adb wait-for-device
