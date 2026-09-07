@@ -3,8 +3,39 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 project_root="$PWD"
 fail() { echo "Release stopped: $*" >&2; exit 1; }
-[[ $# -le 1 ]] || fail 'Usage: scripts/release.sh [remote]'
-remote="${1:-origin}"
+usage() {
+  cat <<'USAGE'
+Usage: scripts/release.sh [--skip-tests | --tests-only] [remote]
+  (default)     Test the version bump, then commit/tag/push the release.
+  --skip-tests  Commit/tag/push the version bump without running tests.
+  --tests-only  Test the current checkout; no version prompt or Git operations.
+  --help        Show this help.
+The release remote defaults to origin. Modes are mutually exclusive.
+USAGE
+}
+mode=release
+remote=origin
+remote_set=false
+for arg in "$@"; do
+  case "$arg" in
+    --skip-tests|--tests-only)
+      [[ "$mode" == release ]] || fail 'Choose only one of --skip-tests and --tests-only.'
+      mode="$arg"
+      ;;
+    --help|-h) usage; exit 0 ;;
+    -*) fail "Unknown option: $arg (see --help)." ;;
+    *)
+      [[ "$remote_set" == false ]] || fail 'Provide at most one remote.'
+      remote="$arg"
+      remote_set=true
+      ;;
+  esac
+done
+if [[ "$mode" == --tests-only ]]; then
+  [[ "$remote_set" == false ]] || fail '--tests-only does not use a remote.'
+  echo 'Running tests on the current checkout; no version changes or release Git operations.'
+  exec bash scripts/test.sh
+fi
 version="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)"[[:space:]]*$/\1/p' app/build.gradle.kts)"
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'Expected versionName in major.minor.patch format.'
 IFS=. read -r major minor patch <<< "$version"
@@ -56,13 +87,17 @@ PY
 git -C "$checkout" add app/build.gradle.kts
 git -C "$checkout" commit -m "Release $next"
 release_commit="$(git -C "$checkout" rev-parse HEAD)"
-echo "Testing $tag in an isolated checkout..."
-# Keep the full output after the temporary checkout is removed.
-mkdir -p "$project_root/dist/local-tests"
-(cd "$checkout" && bash scripts/test.sh) 2>&1 | tee "$project_root/dist/local-tests/release-$tag.log"
-[[ "$(git -C "$checkout" rev-parse HEAD)" == "$release_commit" && -z "$(git -C "$checkout" status --porcelain --untracked-files=all)" ]] || fail 'Test checkout changed during testing.'
-[[ "$(git rev-parse HEAD)" == "$commit" && "$(git symbolic-ref --quiet --short HEAD)" == "$branch" ]] || fail 'Working branch changed during testing.'
-[[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'Working tree changed during testing.'
+if [[ "$mode" == --skip-tests ]]; then
+  echo "Skipping tests for $tag as requested."
+else
+  echo "Testing $tag in an isolated checkout..."
+  # Keep the full output after the temporary checkout is removed.
+  mkdir -p "$project_root/dist/local-tests"
+  (cd "$checkout" && bash scripts/test.sh) 2>&1 | tee "$project_root/dist/local-tests/release-$tag.log"
+fi
+[[ "$(git -C "$checkout" rev-parse HEAD)" == "$release_commit" && -z "$(git -C "$checkout" status --porcelain --untracked-files=all)" ]] || fail 'Release checkout changed during preparation.'
+[[ "$(git rev-parse HEAD)" == "$commit" && "$(git symbolic-ref --quiet --short HEAD)" == "$branch" ]] || fail 'Working branch changed during release preparation.'
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail 'Working tree changed during release preparation.'
 git merge --ff-only "$release_commit"
 git tag -a "$tag" "$release_commit" -m "Quarantine $next"
 if ! git -c push.followTags=false push --atomic "$remote" \

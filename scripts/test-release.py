@@ -40,8 +40,8 @@ class ReleaseTests(unittest.TestCase):
     def git(self, *args):
         return self.run_command('git', *args)
 
-    def release(self, choice, **env):
-        return subprocess.run(['bash', 'scripts/release.sh'], cwd=self.repo,
+    def release(self, choice="", *args, **env):
+        return subprocess.run(['bash', 'scripts/release.sh', *args], cwd=self.repo,
                               env=dict(self.env, **env), input=choice + '\n',
                               text=True, capture_output=True)
 
@@ -107,6 +107,53 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(f'{remote_head}\trefs/heads/main', self.git('ls-remote', '--heads', 'origin').stdout)
         self.assertEqual(self.git('ls-remote', '--tags', 'origin').stdout, '')
+
+
+    def test_skip_tests_pushes_branch_and_tag_without_running_suite(self):
+        result = self.release('patch', '--skip-tests', TEST_EXIT='99')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('tests-ran', result.stdout)
+        head = self.git('rev-parse', 'HEAD').stdout.strip()
+        self.assertNotEqual(head, self.original)
+        self.assertEqual(self.git('rev-parse', 'v1.2.4^{commit}').stdout.strip(), head)
+        self.assertIn(f'{head}\trefs/heads/main', self.git('ls-remote', '--heads', 'origin').stdout)
+        self.assertIn('refs/tags/v1.2.4', self.git('ls-remote', '--tags', 'origin').stdout)
+
+    def test_tests_only_needs_no_remote_identity_clean_tree_or_prompt(self):
+        self.git('remote', 'remove', 'origin')
+        self.git('config', '--unset', 'user.name')
+        self.git('config', '--unset', 'user.email')
+        (self.repo / 'uncommitted').touch()
+        before = self.git('status', '--porcelain').stdout
+        result = self.release('', '--tests-only')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('tests-ran', result.stdout)
+        self.assertNotIn('Current version:', result.stdout)
+        self.assertEqual(self.git('rev-parse', 'HEAD').stdout.strip(), self.original)
+        self.assertEqual(self.git('tag').stdout, '')
+        self.assertEqual(self.git('status', '--porcelain').stdout, before)
+
+    def test_tests_only_propagates_failure(self):
+        result = self.release('', '--tests-only', TEST_EXIT='23')
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(self.git('rev-parse', 'HEAD').stdout.strip(), self.original)
+        self.assertEqual(self.git('tag').stdout, '')
+
+    def test_invalid_modes_do_not_test_or_release(self):
+        for args in [('--tests-only', '--skip-tests'), ('--skip-tests', '--tests-only'),
+                     ('--tests-only', 'origin'), ('--unknown',), ('origin', 'extra')]:
+            with self.subTest(args=args):
+                result = self.release('', *args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('tests-ran', result.stdout)
+                self.assertEqual(self.git('rev-parse', 'HEAD').stdout.strip(), self.original)
+                self.assertEqual(self.git('tag').stdout, '')
+
+    def test_skip_tests_accepts_custom_remote(self):
+        self.git('remote', 'rename', 'origin', 'publish')
+        result = self.release('minor', 'publish', '--skip-tests')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('refs/tags/v1.3.0', self.git('ls-remote', '--tags', 'publish').stdout)
 
 if __name__ == '__main__':
     unittest.main()
